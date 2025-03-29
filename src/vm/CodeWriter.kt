@@ -12,10 +12,62 @@ class CodeWriter(private val outputFile: File) {
 
     private val fileWriter = outputFile.bufferedWriter()
     private var comparisonIndex = 0
+    private var curFunctionFullyQualifiedName = ""
+
+    /**
+     * Let `foo` be a function within the file `Xxx.vm`. The handling of each `call` command within `foo`'s code generates,
+     * and injects into the assembly code stream, a symbol `Xxx.foo$ret.i`, where `i` is a running integer (one such symbol
+     * is generated for each `call command with `foo`).
+     *
+     * This symbol is used to mark the return address within the caller's code.
+     * In subsequent assembly process, the assembler translates this symbol into the physical memory address of the
+     * command immediately following the `call` command.
+     */
+    private val functionReturnAddressRunningInteger = mutableMapOf<String, Int>()
 
     init {
         // Clears the file content.
         fileWriter.write("")
+        writeBootstrap()
+    }
+
+    /**
+     * Writes the assembly instructions that effect the bootstrap code that starts the program's execution.
+     * This code must be placed at the beginning of the generated output file.
+     *
+     * The standard VM mapping on the Hack platform stipulates that the stack be mapped on the host RAM from address 256
+     * onward, and that the first VM function that should start executing is the OS function `Sys.init`.
+     *
+     * To make `Sys.init` the first function to execute, recall that the Hack computer is wired in such a way that upon reset,
+     * it will fetch and execute the instruction located in ROM address 0.
+     * Thus, if we want the computer to execute a predetermined code segment when it boots up, we can put this,
+     * code in the Hack computer’s instruction memory, starting at address 0.
+     */
+    private fun writeBootstrap() {
+        with(fileWriter) {
+            // Bootstrap SP.
+            appendLine("@256")
+            appendLine("D=A")
+            appendLine("@SP")
+            appendLine("M=D")
+
+            // Bootstrap `Sys.init`.
+            writeCall(
+                fullyQualifiedFunctionName = "Sys.init",
+                nArgs = 0
+            )
+        }
+    }
+
+    fun addTranslationLogs(type: CommandType, arg1: String, arg2: String) {
+        fileWriter.appendLine("// Translating \"$type $arg1 $arg2\"")
+    }
+
+    /**
+     * Informs that the translation of a new VM file has started.
+     */
+    fun setFileName(file: File) {
+        //curFileName = file.nameWithoutExtension
     }
 
     /**
@@ -118,6 +170,205 @@ class CodeWriter(private val outputFile: File) {
         appendLine("A=M")
     }
 
+    /**
+     * Let foo be a function within the file `Xxx.vm`. The handling of each `label bar` command within `foo` generates,
+     * and injects into the assembly code stream, the symbol `Xxx.foo$bar`.
+     *
+     * When translating `goto bar` and `if-goto bar` commands (within `foo`) into assembly, the label `Xxx.foo$bar`
+     * must be used instead of bar.
+     */
+    private fun getFullLabelName(labelName: String) = "$curFunctionFullyQualifiedName$${labelName}"
+
+    /**
+     * Write assembly code that effects the label command.
+     *
+     * Labels are used to label the current location in the function's code. Only labeled locations can be jumped to.
+     * The scope of the label is the function in which it is defined.
+     * A `label` command can be before or after the `goto` commands that refer to it.
+     */
+    fun writeLabel(name: String) {
+        fileWriter.appendLine("(${getFullLabelName(name)})")
+    }
+
+    /**
+     * Write assembly code that effects the goto command.
+     *
+     * Goto effects an unconditional goto operation, causing execution to continue from the location marked by the label.
+     */
+    fun writeGoto(labelName: String) {
+        with(fileWriter) {
+            appendLine("@${getFullLabelName(labelName)}")
+            appendLine("0;JMP")
+        }
+    }
+
+    /**
+     * Write assembly code that effects the if-goto command.
+     */
+    fun writeIf(labelName: String) {
+        writePop(SymbolicAddress("R13"))
+
+        with(fileWriter) {
+            appendLine("@R13")
+            appendLine("D=M")
+            appendLine("@${getFullLabelName(labelName)}")
+            appendLine("D;JNE")
+        }
+    }
+
+    /**
+     * Write assembly code that effects the function command.
+     *
+     * The handling of each function `foo` command within the file `Xxx.vm` generates, and injects into the assembly
+     * code stream, a symbol `Xxx.foo` that labels the entry-point to the function's code.
+     *
+     * In the subsequent assembly process, the assembler translates this symbol into the physical address where the
+     * function starts.
+     */
+    fun writeFunction(fullyQualifiedFunctionName: String, nVars: Int) {
+        curFunctionFullyQualifiedName = fullyQualifiedFunctionName
+
+        with(fileWriter) {
+            // Injects a function entry label into the code.
+            appendLine("($fullyQualifiedFunctionName)")
+
+            // This works in tandem with the code that sets the "LCL" virtual register in [writeCall].
+            // The net effect of this is that all the local variables are initialized to zeroes.
+            repeat(nVars) {
+                writePush(Constant(0))
+            }
+        }
+    }
+
+    private fun generateReturnAddress(fullyQualifiedFunctionName: String): SymbolicAddress {
+        val returnAddressPrefix = "$fullyQualifiedFunctionName\$ret."
+
+        val runningInteger = functionReturnAddressRunningInteger.getOrPut(returnAddressPrefix) { 0 }
+        functionReturnAddressRunningInteger[returnAddressPrefix] = runningInteger + 1
+
+        return SymbolicAddress("$returnAddressPrefix$runningInteger")
+    }
+
+    /**
+     * Write assembly code that effects the call command.
+     */
+    fun writeCall(fullyQualifiedFunctionName: String, nArgs: Int) {
+        // First, no need to push the callee's arguments into the stack here.
+        // It is expected that whoever calls the function have pushed [nArgs] argument values onto the stack.
+        // I.e. SP to (SP - nArgs) all contains the function arguments.
+
+        // Next, generate a return address and pushes it to the stack.
+        val returnAddress = generateReturnAddress(fullyQualifiedFunctionName)
+        writePush(Constant(returnAddress.name))
+
+        // Next, saves the caller's memory segments so they can be returned to when the callee completes.
+        writePush(SymbolicAddress("LCL"))
+        writePush(SymbolicAddress("ARG"))
+        writePush(SymbolicAddress("THIS"))
+        writePush(SymbolicAddress("THAT"))
+
+        with(fileWriter) {
+            // Repositions "ARG" to "SP - 5 - nArgs". SP refers to the stack pointer address at this point.
+            // Subtracting 5 from SP moves the address to the top of the caller's frame (the return address pushed on to the stack).
+            // Subtracting nArgs, positions the address to the first argument of the callee pushed on the stack.
+            // Setting this to the "ARG" virtual register has the net effect of setting the argument memory segment for the callee.
+            // This is because "ARG" specifies the base address of the memory segment.
+            // So accessing "argument 0" accesses the first callee argument pushed to the stack, and so on.
+            appendLine("@SP")
+            appendLine("D=M")
+            appendLine("@${5 + nArgs}") // "SP - 5 - nArgs = SP - (5 + nArgs).
+            appendLine("D=D-A")
+            appendLine("@ARG")
+            appendLine("M=D")
+
+            // Repositions "LCL" to "SP".
+            // This works in tandem with the [writeFunction] which initializes all the local variables to zeroes.
+            // The idea behind this repositioning is the same as above for "ARG".
+            // By setting "LCL", we set the local memory segment for the callee.
+            appendLine("@SP")
+            appendLine("D=M")
+            appendLine("@LCL")
+            appendLine("M=D")
+
+            // Goto function. This transfers control flow to the callee.
+            appendLine("@${fullyQualifiedFunctionName}")
+            appendLine("0;JMP")
+
+            // Injects the return address label into the code.
+            appendLine("(${returnAddress.name})")
+        }
+    }
+
+    /**
+     * Write assembly code that effects the return command.
+     */
+    fun writeReturn() {
+        with(fileWriter) {
+            appendLine("@LCL")
+            appendLine("D=M")
+
+            // Repositions the return value for the caller.
+            // The effect of this is that the value returned by the calleee will be moved to the position on the stack
+            // that used to hold the callee's "argument 0".
+            writePop(SymbolicAddress("R13"))
+            appendLine("@R13")
+            appendLine("D=M") // We want R13's value.
+            appendLine("@ARG")
+            appendLine("A=M")
+            appendLine("M=D")
+
+            // Repositions SP for the caller.
+            // This places the SP for the caller one more beyond what used to be the callee's "argument 0".
+            // When combined with the repositioning of the return value above, the net effect is that the callee's
+            // return value is placed at the top of the stack for the caller.
+            appendLine("@ARG")
+            appendLine("D=M")
+            appendLine("@1")
+            appendLine("D=D+A")
+            appendLine("@SP")
+            appendLine("M=D")
+
+            // Recall from [writeCall] that the virtual register "LCL" points to the position just below the caller's frame (on the stack).
+            // We exploit this knowledge with some arithmetic to restore the caller's frame.
+            // Here, we only want to get the caller's return address.
+            appendLine("@LCL")
+            appendLine("D=M")
+            appendLine("@5")
+            appendLine("A=D-A") // Gives us the position on the stack of the return address.
+            appendLine("D=M") // Get the value of the return address.
+            appendLine("@R13")
+            appendLine("M=D") // Puts the return address in a temporary variable.
+
+            restoreMemorySegmentFrame(virtualRegisterName = "THAT", positionFromBehind = 1)
+            restoreMemorySegmentFrame(virtualRegisterName = "THIS", positionFromBehind = 2)
+            restoreMemorySegmentFrame(virtualRegisterName = "ARG", positionFromBehind = 3)
+            // Must come last, since function is based on inner knowledge of how "LCL" was set.
+            restoreMemorySegmentFrame(virtualRegisterName = "LCL", positionFromBehind = 4)
+
+            // Goto the return address.
+            appendLine("@R13")
+            appendLine("A=M")
+            appendLine("0;JMP")
+        }
+    }
+
+    private fun restoreMemorySegmentFrame(virtualRegisterName: String, positionFromBehind: Int) {
+        with(fileWriter) {
+            // Recall from [writeCall] that the virtual register "LCL" points to the position just below the caller's frame (on the stack).
+            // We exploit this knowledge with some arithmetic to restore the caller's frame.
+            appendLine("@LCL")
+            appendLine("D=M")
+
+            // Restores [virtualRegisterName] for the caller.
+            // This allows all relative memory segment to continue working with the caller's context.
+            appendLine("@${positionFromBehind}")
+            appendLine("A=D-A") // Gives us the position on the stack for the [virtualRegisterName].
+            appendLine("D=M") // Get the value at that position on the stack.
+            appendLine("@${virtualRegisterName}")
+            appendLine("M=D")
+        }
+    }
+
     fun close() {
         fileWriter.flush()
         fileWriter.close()
@@ -129,7 +380,17 @@ class CodeWriter(private val outputFile: File) {
 
         fun readFromDRegister(fileWriter: Writer)
 
-        data class Constant(val value: Int) : MemorySegment {
+        data class Constant internal constructor(
+            /**
+             * A "constant string" is not a valid part of the Hack VM language.
+             * However, this "hack" lets us push the value of a symbolic address to the stack.
+             * A [SymbolicAddress] can't be used because its value is what is pushed to the stack.
+             * However, sometimes we are interested in the address.
+             */
+            val value: String
+        ) : MemorySegment {
+
+            constructor(value: Int): this(value.toString())
 
             override fun readFromDRegister(fileWriter: Writer) {
                 throw UnsupportedOperationException("Reading from D register is not supported for the constant memory segment.")
@@ -348,9 +609,9 @@ class CodeWriter(private val outputFile: File) {
                     fileWriter.appendLine("D=D${operator.code}M")
 
                     fileWriter.appendLine("// Push the result back into the stack.")
-                    fileWriter.appendLine("@R16")
+                    fileWriter.appendLine("@R15")
                     fileWriter.appendLine("M=D")
-                    writePush(SymbolicAddress("R16"))
+                    writePush(SymbolicAddress("R15"))
                 }
             }
         }
@@ -385,7 +646,12 @@ class CodeWriter(private val outputFile: File) {
 
                     fileWriter.appendLine("// Label to branch to if comparison is true.")
                     fileWriter.appendLine("(comparison_true_start_$comparisonIndex)")
-                    writePush(Constant(1)) // The condition is true and '1' represents true.
+                    // Save "-1" into R15, since it can't be expressed directly in assembly.
+                    fileWriter.appendLine("D=0")
+                    fileWriter.appendLine("D=D-1")
+                    fileWriter.appendLine("@R15")
+                    fileWriter.appendLine("M=D")
+                    writePush(SymbolicAddress("R15")) // The condition is true and '-1' represents true.
                     fileWriter.appendLine("(comparison_true_end_$comparisonIndex)")
                 }
             }

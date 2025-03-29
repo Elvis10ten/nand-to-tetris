@@ -49,7 +49,7 @@ class VMParser(file: File) {
             "pop" -> CommandType.POP
             "label" -> CommandType.LABEL
             "goto" -> CommandType.GOTO
-            "if" -> CommandType.IF
+            "if-goto" -> CommandType.IF
             "function" -> CommandType.FUNCTION
             "return" -> CommandType.RETURN
             "call" -> CommandType.CALL
