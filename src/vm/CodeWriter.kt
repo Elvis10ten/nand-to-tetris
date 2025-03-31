@@ -42,6 +42,9 @@ class CodeWriter(private val outputFile: File) {
      * it will fetch and execute the instruction located in ROM address 0.
      * Thus, if we want the computer to execute a predetermined code segment when it boots up, we can put this,
      * code in the Hack computer’s instruction memory, starting at address 0.
+     *
+     * In particular, the VM translator will not only translate the VM commands (push, pop, add, and so on) into assembly
+     * instructions—it will also generate assembly code that realizes an envelope in which the program runs.
      */
     private fun writeBootstrap() {
         with(fileWriter) {
@@ -304,9 +307,6 @@ class CodeWriter(private val outputFile: File) {
      */
     fun writeReturn() {
         with(fileWriter) {
-            appendLine("@LCL")
-            appendLine("D=M")
-
             // Repositions the return value for the caller.
             // The effect of this is that the value returned by the calleee will be moved to the position on the stack
             // that used to hold the callee's "argument 0".

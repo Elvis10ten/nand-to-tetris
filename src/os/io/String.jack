@@ -11,53 +11,154 @@
  */
 class String {
 
+    field Array buffer;
+    field int bufferLength;
+    field int stringLength;
+
     /** constructs a new empty string with a maximum length of maxLength
      *  and initial length of 0. */
     constructor String new(int maxLength) {
+        if(maxLength = 0) {
+            let maxLength = 1;
+        }
+
+        let buffer = Array.new(maxLength);
+        let bufferLength = maxLength;
+        let stringLength = 0;
+        return this;
     }
 
     /** Disposes this string. */
     method void dispose() {
+        do Array.dispose(buffer);
+        return;
     }
 
     /** Returns the current length of this string. */
     method int length() {
+        return stringLength;
     }
 
     /** Returns the character at the j-th location of this string. */
     method char charAt(int j) {
+        return buffer[j];
     }
 
     /** Sets the character at the j-th location of this string to c. */
     method void setCharAt(int j, char c) {
+        let buffer[j] = c;
+        return;
     }
 
     /** Appends c to this string's end and returns this string. */
     method String appendChar(char c) {
+        if (stringLength < bufferLength) {
+            let buffer[stringLength] = c;
+            let stringLength = stringLength + 1;
+        }
+
+        return this;
     }
 
     /** Erases the last character from this string. */
     method void eraseLastChar() {
+        if (stringLength > 0) {
+            let stringLength = stringLength - 1;
+        }
+
+        return;
     }
 
     /** Returns the integer value of this string, 
      *  until a non-digit character is detected. */
     method int intValue() {
+        var int intVal;
+        var int i;
+        var boolean isNegative;
+
+        let intVal = 0;
+
+        if((str_len > 0) & (buffer[0] = 45)) { // '-'
+            let isNegative = true;
+            let i = 1;
+        }
+        else {
+            let isNegative = false;
+            let i = 0;
+        }
+
+        while((i < str_len) & String.isCharDigit(buffer[i])) {
+            let intVal = (intVal * 10) + String.intValueOfChart(buffer[i]);
+            let i = i + 1;
+        }
+
+        if(isNegative) {
+            return -intVal;
+        } else {
+            return intVal;
+        }
     }
 
     /** Sets this string to hold a representation of the given value. */
     method void setInt(int val) {
+        let str_len = 0; // Clears the string.
+
+        if (val < 0) {
+            do appendChar(45);
+            do setNonNegativeInt(-val);
+        } else {
+            do setNonNegativeInt(val);
+        }
+
+        return
+    }
+
+    method void setNonNegativeInt(int positiveVal) {
+        var int quotient;
+        var int mod;
+        var char c;
+
+        let quotient = number / 10;
+        let mod = number - (quotient * 10);
+        let c = String.charValueOfInt(mod);
+
+        if(number < 10) {
+            do appendChar(c);
+        } else {
+            do setNonNegativeInt(q);
+            do appendChar(c);
+        }
+
+        return;
+    }
+
+    /** Returns true if the given char is a digit. */
+    function boolean isCharDigit(char c) {
+        return ~(c < 48) & ~(c > 57);
+    }
+
+    /** Returns the integer value of the given digit character */
+    function int intValueOfChar(char c) {
+        return c - 48;
+    }
+
+    /** Returns the char value of the given number. The number must be in the range of 0 to 9. */
+    function char charValueOfInt(int number) {
+        return number + 48;
     }
 
     /** Returns the new line character. */
     function char newLine() {
+        return 128;
     }
 
     /** Returns the backspace character. */
     function char backSpace() {
+        return 129;
     }
 
     /** Returns the double quote (") character. */
     function char doubleQuote() {
+        return 34;
     }
 }

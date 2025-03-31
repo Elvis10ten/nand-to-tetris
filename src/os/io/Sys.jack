@@ -10,18 +10,55 @@ class Sys {
 
     /** Performs all the initializations required by the OS. */
     function void init() {
+        do Math.init();
+        do Keyboard.init();
+        do Memory.init();
+        do Output.init();
+        do Screen.init();
+
+        // Run the main program.
+        do Main.main();
+
+        do Sys.halt();
+        return;
     }
 
     /** Halts the program execution. */
     function void halt() {
+        while(true) {}
+        return;
     }
 
-    /** Waits approximately duration milliseconds and returns.  */
+    /**
+    * This function is supposed to wait a given number of milliseconds and return.
+    * It can be implemented by writing a loop that runs approximately duration milliseconds before terminating.
+    * You will have to time your specific computer to obtain a one millisecond wait, as this constant varies from one CPU to another.
+    * As a result, your Sys.wait() function will not be portable.
+    * The function can be made portable by running yet another configuration function that sets various constants reflecting
+    * the hardware specifications of the host platform, but for Nand to Tetris this is not needed.
+    */
     function void wait(int duration) {
+        var int i, j;
+        let i = 0;
+
+        while(i < duration) {
+            let j = 0;
+            while(j < 1000) { // Hardware specific value.
+                let j = j + 1;
+            }
+
+            let i = i + 1;
+        }
+
+        return;
     }
 
     /** Displays the given error code in the form "ERR<errorCode>",
      *  and halts the program's execution. */
     function void error(int errorCode) {
+        do Output.printString("Err");
+        do Output.printInt(errorCode);
+        do Sys.halt();
+        return;
     }
 }
